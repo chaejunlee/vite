@@ -5,6 +5,7 @@ import sirv from 'sirv'
 import connect from 'connect'
 import type { Connect } from 'dep-types/connect'
 import corsMiddleware from 'cors'
+import chokidar, { type FSWatcher } from 'chokidar'
 import type { ResolvedServerOptions, ResolvedServerUrls } from './server'
 import type { CommonServerOptions } from './http'
 import {
@@ -21,10 +22,17 @@ import { printServerUrls } from './logger'
 import { bindCLIShortcuts } from './shortcuts'
 import type { BindCLIShortcutsOptions } from './shortcuts'
 import { DEFAULT_PREVIEW_PORT } from './constants'
-import { resolveConfig } from './config'
-import type { InlineConfig, ResolvedConfig } from './config'
+import { createWebSocketServer } from './server/ws'
+import { resolveChokidarOptions } from './watch'
+import { resolveConfig } from '.'
+import type { InlineConfig, ResolvedConfig } from '.'
 
-export interface PreviewOptions extends CommonServerOptions {}
+export interface PreviewOptions extends CommonServerOptions {
+  /**
+   * Watch the outDir and trigger a page reload via websocket when it changes.
+   */
+  watch?: boolean | undefined
+}
 
 export interface ResolvedPreviewOptions extends PreviewOptions {}
 
@@ -35,6 +43,7 @@ export function resolvePreviewOptions(
   // The preview server inherits every CommonServerOption from the `server` config
   // except for the port to enable having both the dev and preview servers running
   // at the same time without extra configuration
+  // and the watch option which is only used by the preview server
   return {
     port: preview?.port,
     strictPort: preview?.strictPort ?? server.strictPort,
@@ -44,6 +53,7 @@ export function resolvePreviewOptions(
     proxy: preview?.proxy ?? server.proxy,
     cors: preview?.cors ?? server.cors,
     headers: preview?.headers ?? server.headers,
+    watch: preview?.watch,
   }
 }
 
@@ -114,11 +124,8 @@ export async function preview(
   }
 
   const app = connect() as Connect.Server
-  const httpServer = await resolveHttpServer(
-    config.preview,
-    app,
-    await resolveHttpsConfig(config.preview?.https),
-  )
+  const httpsOptions = await resolveHttpsConfig(config.preview?.https)
+  const httpServer = await resolveHttpServer(config.preview, app, httpsOptions)
   setClientErrorHandler(httpServer, config.logger)
 
   const options = config.preview
@@ -215,6 +222,26 @@ export async function preview(
       true,
       logger,
     )
+  }
+
+  if (config.preview.watch) {
+    const resolvedWatchOptions = resolveChokidarOptions(config, {
+      disableGlobbing: true,
+      ...config.server.watch,
+    })
+    const ws = createWebSocketServer(httpServer, config, httpsOptions)
+    const watcher = chokidar.watch(
+      // config file dependencies and env file might be outside of root
+      [distDir, ...config.configFileDependencies, config.envDir],
+      resolvedWatchOptions,
+    ) as FSWatcher
+
+    watcher.on('change', (file) => {
+      ws.send({
+        type: 'full-reload',
+        path: '*',
+      })
+    })
   }
 
   return server as PreviewServer
