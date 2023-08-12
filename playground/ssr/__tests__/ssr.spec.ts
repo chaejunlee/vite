@@ -12,6 +12,12 @@ test(`circular dependencies modules doesn't throw`, async () => {
   )
 })
 
+test(`imports of circular dependencies might not be initialized`, async () => {
+  await page.goto(`${url}/circular-dep-error`)
+
+  expect(await page.textContent('pre')).toContain('initialization')
+})
+
 test(`deadlock doesn't happen`, async () => {
   await page.goto(`${url}/forked-deadlock`)
 
