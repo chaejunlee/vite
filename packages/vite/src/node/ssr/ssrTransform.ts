@@ -118,6 +118,8 @@ async function ssrTransformScript(
     )
   }
 
+  const checkerTemplate = (id: string, name: string) =>
+    `if (${name} === undefined) { throw new Error("Cannot access '${id}' before initialization") };`
   // 1. check all import statements and record id -> importName map
   for (const node of ast.body as Node[]) {
     // import foo from 'foo' --> foo -> __import_foo__.default
@@ -125,20 +127,23 @@ async function ssrTransformScript(
     // import * as ok from 'foo' --> ok -> __import_foo__
     if (node.type === 'ImportDeclaration') {
       const importId = defineImport(node.source.value as string)
-      s.remove(node.start, node.end)
+      let checker = ''
       for (const spec of node.specifiers) {
         if (spec.type === 'ImportSpecifier') {
-          idToImportMap.set(
-            spec.local.name,
-            `${importId}.${spec.imported.name}`,
-          )
+          const transformedName = `${importId}.${spec.imported.name}`
+          idToImportMap.set(spec.local.name, transformedName)
+          checker += checkerTemplate(spec.local.name, transformedName)
         } else if (spec.type === 'ImportDefaultSpecifier') {
+          const transformedName = `${importId}.default`
           idToImportMap.set(spec.local.name, `${importId}.default`)
+          checker += checkerTemplate(spec.local.name, transformedName)
         } else {
           // namespace specifier
           idToImportMap.set(spec.local.name, importId)
+          checker += checkerTemplate(spec.local.name, importId)
         }
       }
+      s.update(node.start, node.end, checker)
     }
   }
 
